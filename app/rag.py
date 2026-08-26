@@ -1,5 +1,5 @@
-from .retrieval import search_documents
-from .generation import generate_answer
+from retrieval import search_documents
+from generation import generate_answer
 
 
 def ask_question(question: str, sources=None):

@@ -2,16 +2,12 @@ import streamlit as st
 from pathlib import Path
 from html import escape
 
-from client import (
-    ask_question,
-    upload_document,
-    get_documents,
-    delete_document
-)
+from rag import ask_question
+from ingestion import ingest_document
 
 
 # --------------------------------------------------
-# Page configuration
+# Configuration
 # --------------------------------------------------
 
 st.set_page_config(
@@ -21,9 +17,12 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+DOCUMENTS_DIR = Path("documents")
+DOCUMENTS_DIR.mkdir(exist_ok=True)
+
 
 # --------------------------------------------------
-# Custom CSS
+# CSS
 # --------------------------------------------------
 
 st.markdown(
@@ -44,10 +43,6 @@ st.markdown(
         font-size: 0.875rem;
     }
 
-    .main {
-        background-color: #0a0a0a;
-    }
-
     h1, h2, h3 {
         color: #f5f5f5;
         font-weight: 500;
@@ -66,34 +61,12 @@ st.markdown(
         border-radius: 6px;
         padding: 0.5rem 1rem;
         font-weight: 400;
-        transition: all 0.2s;
         width: 100%;
     }
 
     .stButton > button:hover {
         background-color: #252525;
         border-color: #3a3a3a;
-    }
-
-    .stButton > button:active {
-        background-color: #2a2a2a;
-    }
-
-    div[data-testid="stVerticalBlock"] > div:has(
-        button[kind="primary"]
-    ) button,
-    .stButton > button[kind="primary"] {
-        background-color: #2563eb;
-        border-color: #2563eb;
-        color: white;
-    }
-
-    div[data-testid="stVerticalBlock"] > div:has(
-        button[kind="primary"]
-    ) button:hover,
-    .stButton > button[kind="primary"]:hover {
-        background-color: #1d4ed8;
-        border-color: #1d4ed8;
     }
 
     .stChatInput {
@@ -112,11 +85,6 @@ st.markdown(
         border: none;
     }
 
-    .stChatInput textarea:focus {
-        border-color: #3a3a3a;
-        box-shadow: 0 0 0 1px #3a3a3a;
-    }
-
     .stChatMessage {
         background-color: transparent;
         border: none;
@@ -128,30 +96,11 @@ st.markdown(
         line-height: 1.7;
     }
 
-    [data-testid="stChatMessageContent"] p {
-        margin-bottom: 0.75rem;
-    }
-
     [data-testid="stFileUploader"] {
         background-color: #1a1a1a;
         border: 1px dashed #2a2a2a;
         border-radius: 6px;
         padding: 1rem;
-    }
-
-    [data-testid="stFileUploader"] section {
-        border: none;
-        padding: 0;
-    }
-
-    [data-testid="stFileUploader"] label {
-        color: #a0a0a0;
-        font-size: 0.875rem;
-    }
-
-    hr {
-        border-color: #222222;
-        margin: 1.5rem 0;
     }
 
     .doc-item {
@@ -162,16 +111,6 @@ st.markdown(
         margin-bottom: 0.5rem;
         font-size: 0.875rem;
         color: #d0d0d0;
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-    }
-
-    .doc-item-name {
-        flex: 1;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
     }
 
     .doc-item-status {
@@ -219,14 +158,12 @@ st.markdown(
         color: #f5f5f5;
         margin-bottom: 1rem;
         font-weight: 400;
-        letter-spacing: -0.02em;
     }
 
     .empty-description {
         color: #6b7280;
         font-size: 0.9375rem;
         line-height: 1.6;
-        margin-bottom: 0.25rem;
     }
 
     .sidebar-brand {
@@ -234,7 +171,6 @@ st.markdown(
         font-weight: 500;
         color: #f5f5f5;
         margin-bottom: 0.25rem;
-        letter-spacing: -0.02em;
     }
 
     .sidebar-subtitle {
@@ -252,14 +188,8 @@ st.markdown(
         margin-top: 1.5rem;
     }
 
-    #MainMenu {
-        visibility: hidden;
-    }
-
-    footer {
-        visibility: hidden;
-    }
-
+    #MainMenu,
+    footer,
     header {
         visibility: hidden;
     }
@@ -282,14 +212,6 @@ if "active_documents" not in st.session_state:
 
 
 # --------------------------------------------------
-# Documents directory
-# --------------------------------------------------
-
-DOCUMENTS_DIR = Path("documents")
-DOCUMENTS_DIR.mkdir(exist_ok=True)
-
-
-# --------------------------------------------------
 # Sidebar
 # --------------------------------------------------
 
@@ -304,10 +226,7 @@ with st.sidebar:
         """
     )
 
-    if st.button(
-        "New Chat",
-        use_container_width=True
-    ):
+    if st.button("New Chat", use_container_width=True):
         st.session_state.messages = []
         st.rerun()
 
@@ -336,20 +255,27 @@ with st.sidebar:
 
             with st.spinner("Processing documents..."):
 
+                processed = 0
+
                 for uploaded_file in uploaded_files:
 
-                    result = upload_document(
-                        uploaded_file
-                    )
+                    filename = Path(uploaded_file.name).name
+                    file_path = DOCUMENTS_DIR / filename
 
-                    filename = result["filename"]
+                    with open(file_path, "wb") as f:
+                        f.write(uploaded_file.getvalue())
+
+                    chunks = ingest_document(str(file_path))
 
                     if filename not in st.session_state.active_documents:
-                        st.session_state.active_documents.append(
-                            filename
-                        )
+                        st.session_state.active_documents.append(filename)
 
-            st.success("Documents processed")
+                    processed += chunks
+
+            st.success(
+                f"Documents processed — {processed} chunks"
+            )
+
             st.rerun()
 
     if st.session_state.active_documents:
@@ -369,20 +295,15 @@ with st.sidebar:
             st.html(
                 f"""
                 <div class="doc-item">
-                    <div class="doc-item-name">
-                        {safe_doc_name}
-                    </div>
-
-                    <div class="doc-item-status">
-                        Ready
-                    </div>
+                    <div>{safe_doc_name}</div>
+                    <div class="doc-item-status">Ready</div>
                 </div>
                 """
             )
 
 
 # --------------------------------------------------
-# Main content
+# Chat history
 # --------------------------------------------------
 
 if not st.session_state.messages:
@@ -413,20 +334,13 @@ else:
 
         with st.chat_message(message["role"]):
 
-            st.markdown(
-                message["content"]
-            )
+            st.markdown(message["content"])
 
-            if (
-                "sources" in message
-                and message["sources"]
-            ):
+            if message.get("sources"):
 
                 sources_html = (
                     '<div class="sources-container">'
-                    '<div class="sources-label">'
-                    'Sources'
-                    '</div>'
+                    '<div class="sources-label">Sources</div>'
                 )
 
                 for source in message["sources"]:
@@ -443,20 +357,19 @@ else:
 
 
 # --------------------------------------------------
-# Chat input
+# Chat
 # --------------------------------------------------
 
 prompt = st.chat_input(
     "Ask a question about your documents"
 )
 
-
 if prompt:
 
     if not st.session_state.active_documents:
 
         st.error(
-            "Please upload and process documents first"
+            "Please upload and process a document first."
         )
 
     else:
@@ -473,51 +386,49 @@ if prompt:
 
             with st.spinner("Thinking..."):
 
-                # Ask FastAPI backend
-                result = ask_question(
-                    prompt,
-                    sources=st.session_state.active_documents
-                )
+                try:
 
-                answer = result["answer"]
-
-                # Sources returned by FastAPI
-                sources = [
-                    f'{item["source"]} — Page {item["page"]}'
-                    for item in result["sources"]
-                ]
-
-                # Display answer
-                st.markdown(answer)
-
-                # --------------------------------------------------
-                # Sources
-                # --------------------------------------------------
-
-                if sources:
-
-                    sources_html = (
-                        '<div class="sources-container">'
-                        '<div class="sources-label">'
-                        'Sources'
-                        '</div>'
+                    result = ask_question(
+                        prompt,
+                        sources=st.session_state.active_documents
                     )
 
-                    for source in sources:
+                    answer = result["answer"]
 
-                        sources_html += (
-                            '<span class="source-item">'
-                            f'{escape(source)}'
-                            '</span>'
+                    sources = [
+                        f'{item["source"]} — Page {item["page"]}'
+                        for item in result["sources"]
+                    ]
+
+                    st.markdown(answer)
+
+                    if sources:
+
+                        sources_html = (
+                            '<div class="sources-container">'
+                            '<div class="sources-label">Sources</div>'
                         )
 
-                    sources_html += "</div>"
+                        for source in sources:
 
-                    st.html(sources_html)
+                            sources_html += (
+                                '<span class="source-item">'
+                                f'{escape(source)}'
+                                '</span>'
+                            )
 
-                # Save assistant response
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": answer,
-                    "sources": sources
-                })
+                        sources_html += "</div>"
+
+                        st.html(sources_html)
+
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": answer,
+                        "sources": sources
+                    })
+
+                except Exception as e:
+
+                    st.error(
+                        f"Error while processing your question: {e}"
+                    )
